@@ -126,6 +126,17 @@ async function loadLazy(doc) {
 
   loadCSS(`${window.hlx.codeBasePath}/styles/lazy-styles.css`);
   loadFonts();
+
+  // load fxt-telemetry.js
+  const FXT = await import('./fxt-telemetry.js');
+  FXT.init({
+    endpoint: '/api/fxt/events',
+    formSelector: 'form',
+    batchSize: 25,
+    flushIntervalMs: 4000,
+    mutationBatchMs: 3000,
+    maxMutationRecordsPerBatch: 8,
+  });
 }
 
 /**
@@ -136,16 +147,6 @@ function loadDelayed() {
   // eslint-disable-next-line import/no-cycle
   window.setTimeout(() => import('./delayed.js'), 3000);
   // load anything that can be postponed to the latest here
-  // load fxt-telemetry.js
-  import('./fxt-telemetry.js');
-  /* FXT.init({
-    endpoint: '/api/fxt/events',
-    formSelector: 'form',
-    batchSize: 25,
-    flushIntervalMs: 4000,
-    mutationBatchMs: 3000,
-    maxMutationRecordsPerBatch: 8,
-  }); */
 }
 
 async function loadPage() {
