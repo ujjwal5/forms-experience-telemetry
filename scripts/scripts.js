@@ -133,7 +133,7 @@ async function loadLazy(doc) {
   script.onload = () => {
     if (window.FXT) {
       window.FXT.init({
-        endpoint: '/api/fxt/events',
+        endpoint: 'http://localhost:3000/api/fxt/events',
         formSelector: 'form',
         batchSize: 25,
         flushIntervalMs: 4000,
