@@ -192,38 +192,12 @@
       // small payload enforcement (best-effort)
       // convert to JSON once
       const body = JSON.stringify(payload);
-      logDebug('Flushing', payload.events.length, 'events, bytes', body.length);
-  
-      // try sendBeacon on unload, else send fetch
-      if (navigator.sendBeacon && FXT._isUnloading) {
-        try {
-          const sent = navigator.sendBeacon(FXT._config.endpoint, body);
-          if (sent) {
-            FXT._lastFlush = Date.now();
-            return;
-          }
-        } catch (e) {
-          // fall through to fetch
-        }
-      }
-  
-      // Use fetch as fallback
-      fetch(FXT._config.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // do not include credentials to avoid sending cookies if you want minimal identifiers
-        credentials: 'omit',
-        body
-      }).then(res => {
-        FXT._lastFlush = Date.now();
-        logDebug('Flush response', res.status);
-      }).catch(err => {
-        // if network fails, push events back to queue (simple retry)
-        logDebug('Flush failed', err);
-        // put back events at front (best-effort)
-        const returned = JSON.parse(body).events;
-        FXT._events = returned.concat(FXT._events);
-      });
+      
+      // Log events to console instead of sending to endpoint
+      console.log('[FXT] Flushing', payload.events.length, 'events, bytes:', body.length);
+      console.log('[FXT] Payload:', payload);
+      
+      FXT._lastFlush = Date.now();
     }
   
     function scheduleFlush() {
