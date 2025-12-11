@@ -127,16 +127,29 @@ async function loadLazy(doc) {
   loadCSS(`${window.hlx.codeBasePath}/styles/lazy-styles.css`);
   loadFonts();
 
-  // load fxt-telemetry.js
-  const FXT = await import('./fxt-telemetry.js');
-  FXT.init({
-    endpoint: '/api/fxt/events',
-    formSelector: 'form',
-    batchSize: 25,
-    flushIntervalMs: 4000,
-    mutationBatchMs: 3000,
-    maxMutationRecordsPerBatch: 8,
-  });
+  // load fxt-telemetry.js as a script tag
+  const script = document.createElement('script');
+  script.src = `${window.hlx.codeBasePath}/scripts/fxt-telemetry.js`;
+  script.onload = () => {
+    if (window.FXT) {
+      window.FXT.init({
+        endpoint: '/api/fxt/events',
+        formSelector: 'form',
+        batchSize: 25,
+        flushIntervalMs: 4000,
+        mutationBatchMs: 3000,
+        maxMutationRecordsPerBatch: 8,
+        debug: true, // Enable debug logging
+      });
+      console.log('[FXT] Telemetry initialized successfully');
+    } else {
+      console.error('[FXT] FXT not found on window object');
+    }
+  };
+  script.onerror = () => {
+    console.error('[FXT] Failed to load fxt-telemetry.js');
+  };
+  document.head.appendChild(script);
 }
 
 /**
