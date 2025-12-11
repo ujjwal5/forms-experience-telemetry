@@ -197,7 +197,9 @@
       // try sendBeacon on unload, else send fetch
       if (navigator.sendBeacon && FXT._isUnloading) {
         try {
-          const sent = navigator.sendBeacon(FXT._config.endpoint, body);
+          // Wrap in Blob to send as application/json
+          const blob = new Blob([body], { type: 'application/json' });
+          const sent = navigator.sendBeacon(FXT._config.endpoint, blob);
           if (sent) {
             FXT._lastFlush = Date.now();
             return;
@@ -207,11 +209,10 @@
         }
       }
   
-      // Use fetch as fallback
+      // Use fetch to send to endpoint
       fetch(FXT._config.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // do not include credentials to avoid sending cookies if you want minimal identifiers
         credentials: 'omit',
         body
       }).then(res => {
