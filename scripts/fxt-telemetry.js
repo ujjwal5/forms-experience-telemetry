@@ -1,5 +1,5 @@
 /**
- * FXT Telemetry SDK (single-file)
+ * FXT Telemetry SDK (single-file) - Enhanced with Pain Point Analytics
  *
  * Usage:
  *   <script src="/path/to/fxt-telemetry.js"></script>
@@ -15,8 +15,27 @@
  *  - Sends events in small batches; uses sendBeacon on unload
  *  - MutationObserver captures DOM structural changes (rate limited)
  *
+ * Pain Point Analytics (NEW):
+ *  - Time spent on each field (focus to blur duration)
+ *  - Multiple edits/rewrites tracking (edit count per field)
+ *  - Repeated validation failures (count per field)
+ *  - Backspace/correction patterns (hesitation indicators)
+ *  - Field clear events (user frustration signals)
+ *  - Paste events (different interaction pattern)
+ *  - Drop-off detection (last field before abandonment)
+ *  - Field engagement metrics (focus count, total time, edit count)
+ *  - Automatic pain point identification (fields with struggle indicators)
+ *  - Periodic field analytics snapshots (every 30s)
+ *  - Comprehensive field analytics summary on session end
+ *
+ * Event Types Sent:
+ *  - focus, blur, change, error (validation), paste
+ *  - field-analytics (aggregated pain point data)
+ *  - session-start, session-end, heartbeat
+ *  - dom-mutation, step-transition
+ *
  * Privacy Notes:
- *  - DOES NOT include field values
+ *  - DOES NOT include field values (only metadata)
  *  - DOES NOT emit IP/UA in body, but transport (browser->server) will include standard headers; server must drop/ignore them
  *  - Keep events small
  */
@@ -169,7 +188,95 @@
     FXT._mutationTimer = null;
     FXT._collectedConsole = [];
     FXT._isInitialized = false;
+    
+    // Enhanced tracking for pain point analysis
+    FXT._fieldMetrics = {}; // Per-field engagement tracking
+    FXT._currentFocusedField = null;
+    FXT._fieldFocusStartTime = null;
   
+    /* ---------------------------
+     * Field Metrics Tracking (Pain Point Analysis)
+     * --------------------------- */
+    function initFieldMetrics(fieldPath) {
+      if (!FXT._fieldMetrics[fieldPath]) {
+        FXT._fieldMetrics[fieldPath] = {
+          focusCount: 0,
+          totalTimeSpent: 0,
+          editCount: 0,
+          validationFailures: 0,
+          lastValueLength: 0,
+          backspaceCount: 0,
+          pasteCount: 0,
+          clearCount: 0,
+          lastError: null
+        };
+      }
+      return FXT._fieldMetrics[fieldPath];
+    }
+    
+    function getFieldMetrics(fieldPath) {
+      return FXT._fieldMetrics[fieldPath] || null;
+    }
+    
+    // Send aggregated field metrics and identify pain points
+    function sendFieldMetricsSummary(reason) {
+      // Calculate drop-off point (last focused field)
+      const dropOffField = FXT._currentFocusedField;
+      
+      // Identify pain points (fields with high struggle indicators)
+      const painPoints = [];
+      const fieldSummaries = [];
+      
+      for (const [fieldPath, metrics] of Object.entries(FXT._fieldMetrics)) {
+        const summary = {
+          field: fieldPath,
+          focusCount: metrics.focusCount,
+          totalTimeSpentMs: metrics.totalTimeSpent,
+          editCount: metrics.editCount,
+          validationFailures: metrics.validationFailures,
+          backspaceCount: metrics.backspaceCount,
+          pasteCount: metrics.pasteCount,
+          clearCount: metrics.clearCount
+        };
+        
+        fieldSummaries.push(summary);
+        
+        // Pain point heuristics
+        const isPainPoint = 
+          metrics.validationFailures > 2 || // Repeated validation failures
+          metrics.totalTimeSpent > 30000 || // More than 30 seconds
+          metrics.focusCount > 3 || // Returned to field multiple times
+          metrics.editCount > 5 || // Many edits/corrections
+          metrics.clearCount > 1; // Cleared field multiple times
+        
+        if (isPainPoint) {
+          painPoints.push({
+            field: fieldPath,
+            reasons: {
+              repeatedValidationFailures: metrics.validationFailures > 2,
+              excessiveTimeSpent: metrics.totalTimeSpent > 30000,
+              multipleReturns: metrics.focusCount > 3,
+              manyEdits: metrics.editCount > 5,
+              multipleClears: metrics.clearCount > 1
+            },
+            metrics: summary
+          });
+        }
+      }
+      
+      // Send comprehensive field analytics event
+      enqueue(makeEvent('field-analytics', {
+        reason: reason,
+        dropOffField: dropOffField,
+        totalFieldsInteracted: fieldSummaries.length,
+        painPoints: painPoints,
+        painPointCount: painPoints.length,
+        allFieldMetrics: fieldSummaries
+      }));
+      
+      logDebug('Field analytics:', painPoints.length, 'pain points detected');
+    }
+
     /* ---------------------------
      * Event queue and sender
      * --------------------------- */
@@ -243,13 +350,25 @@
       // delegate events from form
       function onFocus(e) {
         const el = e.target;
+        const fieldPath = cssPath(el);
+        const metrics = initFieldMetrics(fieldPath);
+        
+        // Track focus start time
+        FXT._currentFocusedField = fieldPath;
+        FXT._fieldFocusStartTime = perfNow();
+        metrics.focusCount++;
+        
         const info = {
           formSelector: FXT._config.formSelector,
-          field: cssPath(el),
+          field: fieldPath,
           tag: el.tagName,
           fieldType: el.type || null,
           step: stepIndexForElement(el),
-          valueSummary: valueSummaryForElement(el)
+          valueSummary: valueSummaryForElement(el),
+          // Pain point metrics
+          focusCount: metrics.focusCount,
+          previousValidationFailures: metrics.validationFailures,
+          previousEditCount: metrics.editCount
         };
         enqueue(makeEvent('focus', info));
         logDebug('focus', info.field);
@@ -257,26 +376,65 @@
   
       function onBlur(e) {
         const el = e.target;
+        const fieldPath = cssPath(el);
+        const metrics = getFieldMetrics(fieldPath);
+        
+        // Calculate time spent on this field
+        let timeSpent = 0;
+        if (FXT._currentFocusedField === fieldPath && FXT._fieldFocusStartTime) {
+          timeSpent = Math.round(perfNow() - FXT._fieldFocusStartTime);
+          if (metrics) {
+            metrics.totalTimeSpent += timeSpent;
+          }
+        }
+        
+        FXT._currentFocusedField = null;
+        FXT._fieldFocusStartTime = null;
+        
         const info = {
-          field: cssPath(el),
+          field: fieldPath,
           tag: el.tagName,
           fieldType: el.type || null,
           step: stepIndexForElement(el),
-          valueSummary: valueSummaryForElement(el)
+          valueSummary: valueSummaryForElement(el),
+          // Pain point metrics
+          timeSpentMs: timeSpent,
+          totalTimeSpentMs: metrics ? metrics.totalTimeSpent : 0,
+          editCount: metrics ? metrics.editCount : 0,
+          validationFailures: metrics ? metrics.validationFailures : 0,
+          backspaceCount: metrics ? metrics.backspaceCount : 0,
+          pasteCount: metrics ? metrics.pasteCount : 0
         };
         enqueue(makeEvent('blur', info));
-        logDebug('blur', info.field);
+        logDebug('blur', info.field, `${timeSpent}ms spent`);
       }
   
       function onChange(e) {
         const el = e.target;
+        const fieldPath = cssPath(el);
+        const metrics = initFieldMetrics(fieldPath);
+        const valueSummary = valueSummaryForElement(el);
+        
+        // Track edits
+        metrics.editCount++;
+        
+        // Detect if field was cleared
+        if (metrics.lastValueLength > 0 && valueSummary && valueSummary.length === 0) {
+          metrics.clearCount++;
+        }
+        metrics.lastValueLength = valueSummary ? valueSummary.length : 0;
+        
         const info = {
-          field: cssPath(el),
+          field: fieldPath,
           tag: el.tagName,
           fieldType: el.type || null,
           step: stepIndexForElement(el),
-          valueSummary: valueSummaryForElement(el)
+          valueSummary: valueSummary,
+          // Pain point metrics
+          editCount: metrics.editCount,
+          clearCount: metrics.clearCount
         };
+        
         // classify validation state if available
         if (el.validity) {
           info.validity = {
@@ -287,6 +445,13 @@
             tooShort: !!el.validity.tooShort,
             tooLong: !!el.validity.tooLong
           };
+          
+          // Track validation failures
+          if (!el.validity.valid) {
+            metrics.validationFailures++;
+            metrics.lastError = info.validity;
+            info.validationFailureCount = metrics.validationFailures;
+          }
         }
         enqueue(makeEvent('change', info));
         logDebug('change', info.field, info.validity);
@@ -295,15 +460,26 @@
       function onInvalid(e) {
         // capture validation message without values
         const el = e.target;
+        const fieldPath = cssPath(el);
+        const metrics = initFieldMetrics(fieldPath);
+        
+        // Track repeated validation failures
+        metrics.validationFailures++;
+        
         const info = {
-          field: cssPath(el),
+          field: fieldPath,
           tag: el.tagName,
           fieldType: el.type || null,
           step: stepIndexForElement(el),
-          validity: el.validity ? { ...el.validity } : null
+          validity: el.validity ? { ...el.validity } : null,
+          // Pain point metrics - CRITICAL for identifying problematic fields
+          validationFailureCount: metrics.validationFailures,
+          editCount: metrics.editCount,
+          timeSpentMs: metrics.totalTimeSpent,
+          isRepeatedFailure: metrics.validationFailures > 1
         };
         enqueue(makeEvent('error', Object.assign({ errorType: 'validation' }, info)));
-        logDebug('invalid', info.field);
+        logDebug('invalid', info.field, `Failure #${metrics.validationFailures}`);
         // prevent browser default bubble if needed — but we won't prevent default
       }
   
@@ -320,11 +496,45 @@
         }
       }
   
+      // Track keystroke patterns for pain point analysis
+      function onKeyDown(e) {
+        const el = e.target;
+        if (!el || !el.tagName) return;
+        const tag = el.tagName.toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') return;
+        
+        const fieldPath = cssPath(el);
+        const metrics = initFieldMetrics(fieldPath);
+        
+        // Track backspace/delete (indicates corrections/hesitation)
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+          metrics.backspaceCount++;
+        }
+      }
+      
+      // Track paste events (different interaction pattern)
+      function onPaste(e) {
+        const el = e.target;
+        if (!el || !el.tagName) return;
+        const fieldPath = cssPath(el);
+        const metrics = initFieldMetrics(fieldPath);
+        metrics.pasteCount++;
+        
+        // Log paste event for analysis
+        enqueue(makeEvent('paste', {
+          field: fieldPath,
+          tag: el.tagName,
+          fieldType: el.type || null
+        }));
+      }
+      
       form.addEventListener('focus', onFocus, true);
       form.addEventListener('blur', onBlur, true);
       form.addEventListener('change', onChange, true);
       form.addEventListener('invalid', onInvalid, true);
       form.addEventListener('click', onFormClick, true);
+      form.addEventListener('keydown', onKeyDown, true);
+      form.addEventListener('paste', onPaste, true);
   
       // expose programmatic API for step transitions (recommended)
       FXT.stepTransition = function (from, to) {
@@ -534,6 +744,8 @@
       window.addEventListener('beforeunload', () => {
         FXT._isUnloading = true;
         try {
+          // Send field metrics summary before session ends
+          sendFieldMetricsSummary('unload');
           // add session-end
           enqueue(makeEvent('session-end', { reason: 'unload' }));
           // attempt final flush
@@ -547,14 +759,20 @@
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
           FXT._isUnloading = true;
+          sendFieldMetricsSummary('hidden');
           enqueue(makeEvent('session-end', { reason: 'hidden' }));
           flush();
         }
       });
   
       // small heartbeat / keepalive event occasionally so session isn't empty
+      // Also send field metrics summary periodically for ongoing analysis
       setInterval(() => {
         enqueue(makeEvent('heartbeat', { tSinceStart: Math.round((perfNow() - FXT._startedAt) / 1000) }));
+        // Send field analytics snapshot every minute
+        if (Object.keys(FXT._fieldMetrics).length > 0) {
+          sendFieldMetricsSummary('periodic');
+        }
       }, 30000);
   
       logDebug('FXT initialized', FXT._sessionId, FXT._config);
@@ -566,6 +784,8 @@
         if (FXT._mo) FXT._mo.disconnect();
         FXT._isInitialized = false;
         clearTimeout(FXT._flushTimer);
+        // Send field metrics summary
+        sendFieldMetricsSummary('stop');
         // final flush
         enqueue(makeEvent('session-end', { reason: 'stop' }));
         flush();
